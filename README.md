@@ -17,6 +17,9 @@ End-to-end cricket analytics platform built on **250K+ ball-by-ball records**, w
 | **Team lab** | Season standings, chase vs defend, head-to-head |
 | **ML** | Match winner classifier, first-innings score regressor, **live chase win-probability** model |
 | **Streamlit** | Multi-page interactive dashboard with Plotly visuals |
+| **Caps & specialists** | Orange/Purple Cap race charts + phase strike-rate/economy leaders |
+| **Compare & Dream Team** | Multi-player radar comparison + fantasy XI builder |
+| **Match simulator** | Monte Carlo chase engine with ML win-prob comparison |
 | **Power BI** | Star-schema CSV/XLSX exports + relationship guide |
 
 ### Upgrades beyond a basic portfolio build

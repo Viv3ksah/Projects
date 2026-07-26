@@ -179,3 +179,59 @@ def cap_standings(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
         {"season": season},
     )
     return orange, purple
+
+
+def all_season_cap_winners() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Orange & Purple Cap winners for every season (rank-1 only)."""
+    orange = read_sql(
+        """
+        WITH bat AS (
+            SELECT
+                m.season,
+                p.player_name,
+                SUM(d.runs_batter) AS runs,
+                COUNT(*) AS balls,
+                ROUND(100.0 * SUM(d.runs_batter) / NULLIF(COUNT(*), 0), 2) AS strike_rate,
+                SUM(d.is_six) AS sixes,
+                ROW_NUMBER() OVER (
+                    PARTITION BY m.season
+                    ORDER BY SUM(d.runs_batter) DESC, COUNT(*) ASC
+                ) AS rk
+            FROM deliveries d
+            JOIN players p ON p.player_id = d.striker_id
+            JOIN matches m ON m.match_id = d.match_id
+            GROUP BY m.season, p.player_name
+        )
+        SELECT season, player_name, runs, balls, strike_rate, sixes
+        FROM bat
+        WHERE rk = 1
+        ORDER BY season
+        """
+    )
+    purple = read_sql(
+        """
+        WITH bowl AS (
+            SELECT
+                m.season,
+                p.player_name,
+                SUM(d.is_wicket) AS wickets,
+                COUNT(*) AS balls,
+                ROUND(6.0 * SUM(d.runs_total) / NULLIF(COUNT(*), 0), 2) AS economy,
+                ROW_NUMBER() OVER (
+                    PARTITION BY m.season
+                    ORDER BY SUM(d.is_wicket) DESC, SUM(d.runs_total) ASC
+                ) AS rk
+            FROM deliveries d
+            JOIN players p ON p.player_id = d.bowler_id
+            JOIN matches m ON m.match_id = d.match_id
+            WHERE (d.extras_type IS NULL OR d.extras_type NOT IN ('wides', 'noballs'))
+            GROUP BY m.season, p.player_name
+            HAVING SUM(d.is_wicket) > 0
+        )
+        SELECT season, player_name, wickets, balls, economy
+        FROM bowl
+        WHERE rk = 1
+        ORDER BY season
+        """
+    )
+    return orange, purple

@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 from app.styles import inject
 from config.settings import DB_PATH, MODELS_DIR
 from src.analytics.caps_race import (
+    all_season_cap_winners,
     cap_standings,
     orange_cap_race,
     phase_specialists,
@@ -33,6 +34,14 @@ from src.analytics.player_analytics import (
     list_players,
     player_form_index,
     player_phase_profile,
+)
+from src.analytics.player_photos import render_cap_gallery
+from src.analytics.team_players import (
+    adjust_win_probability,
+    player_impact_score,
+    previous_season,
+    team_batters_last_season,
+    team_bowlers_last_season,
 )
 from src.analytics.team_analytics import (
     chase_defend_profile,
@@ -346,6 +355,62 @@ def page_predictions() -> None:
         toss = st.radio("Toss winner", ["Team 1", "Team 2"], horizontal=True)
         decision = st.radio("Toss decision", ["field", "bat"], horizontal=True)
 
+        prev = previous_season(int(season))
+        st.markdown("#### Key players (last season form)")
+        if prev is None:
+            st.info("No previous season available — prediction uses team/venue features only.")
+            t1_bat = t1_bowl = t2_bat = t2_bowl = pd.DataFrame()
+            pick_t1 = pick_t2 = []
+        else:
+            st.caption(f"Select impact players using **{prev}** performance for each side.")
+            t1_bat = team_batters_last_season(t1, int(season))
+            t1_bowl = team_bowlers_last_season(t1, int(season))
+            t2_bat = team_batters_last_season(t2, int(season))
+            t2_bowl = team_bowlers_last_season(t2, int(season))
+
+            t1_opts = sorted(set(t1_bat["player_name"].tolist() + t1_bowl["player_name"].tolist()))
+            t2_opts = sorted(set(t2_bat["player_name"].tolist() + t2_bowl["player_name"].tolist()))
+
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                default_t1 = t1_opts[:3]
+                pick_t1 = st.multiselect(
+                    f"{t1} players",
+                    t1_opts,
+                    default=default_t1,
+                    max_selections=5,
+                    key="pred_players_t1",
+                )
+                if not t1_bat.empty:
+                    st.dataframe(
+                        t1_bat[t1_bat["player_name"].isin(pick_t1)][
+                            ["player_name", "runs", "strike_rate", "sixes"]
+                        ]
+                        if pick_t1
+                        else t1_bat.head(5)[["player_name", "runs", "strike_rate", "sixes"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+            with pc2:
+                default_t2 = t2_opts[:3]
+                pick_t2 = st.multiselect(
+                    f"{t2} players",
+                    t2_opts,
+                    default=default_t2,
+                    max_selections=5,
+                    key="pred_players_t2",
+                )
+                if not t2_bat.empty:
+                    st.dataframe(
+                        t2_bat[t2_bat["player_name"].isin(pick_t2)][
+                            ["player_name", "runs", "strike_rate", "sixes"]
+                        ]
+                        if pick_t2
+                        else t2_bat.head(5)[["player_name", "runs", "strike_rate", "sixes"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
         id_map = dict(zip(active_teams["team_name"], active_teams["team_id"])) if not active_teams.empty else dict(zip(teams["team_name"], teams["team_id"]))
         t1_id = int(id_map[t1])
         t2_id = int(id_map[t2])
@@ -380,16 +445,48 @@ def page_predictions() -> None:
             "season": int(season),
         }
         if st.button("Predict winner", type="primary"):
-            out = predict_match_outcome(features)
+            base = predict_match_outcome(features)
+            impact1 = player_impact_score(t1_bat, t1_bowl, pick_t1)
+            impact2 = player_impact_score(t2_bat, t2_bowl, pick_t2)
+            out = adjust_win_probability(base["team1_win_probability"], impact1, impact2)
+
             fig = go.Figure(
-                go.Bar(
-                    x=[t1, t2],
-                    y=[out["team1_win_probability"] * 100, out["team2_win_probability"] * 100],
-                    marker_color=["#0f3d2e", "#d9782d"],
-                )
+                data=[
+                    go.Bar(
+                        name="Base model",
+                        x=[t1, t2],
+                        y=[
+                            out["base_team1_win_probability"] * 100,
+                            (1 - out["base_team1_win_probability"]) * 100,
+                        ],
+                        marker_color=["#8fbf5a", "#e0a36b"],
+                    ),
+                    go.Bar(
+                        name="With selected players",
+                        x=[t1, t2],
+                        y=[out["team1_win_probability"] * 100, out["team2_win_probability"] * 100],
+                        marker_color=["#0f3d2e", "#d9782d"],
+                    ),
+                ]
             )
-            fig.update_layout(**PLOTLY_LAYOUT, yaxis_title="Win probability %", height=360)
+            fig.update_layout(
+                **PLOTLY_LAYOUT,
+                barmode="group",
+                yaxis_title="Win probability %",
+                height=380,
+                title="Win prediction — team model + last-season player form",
+            )
             st.plotly_chart(fig, use_container_width=True)
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric(f"{t1} win %", f"{out['team1_win_probability']*100:.1f}%")
+            m2.metric(f"{t2} win %", f"{out['team2_win_probability']*100:.1f}%")
+            m3.metric("Player impact Δ", f"{out['impact_delta']*100:+.1f} pts")
+            if pick_t1 or pick_t2:
+                st.caption(
+                    f"Selected — {t1}: {', '.join(pick_t1) or 'none'} · "
+                    f"{t2}: {', '.join(pick_t2) or 'none'}"
+                )
 
     with tab2:
         st.write("Project final first-innings score from a live checkpoint.")
@@ -504,7 +601,45 @@ def page_caps() -> None:
     st.header("Caps Race & Specialists")
     seasons = _seasons()
     season = st.selectbox("Season", seasons, index=len(seasons) - 1, key="caps_season")
-    tab1, tab2, tab3 = st.tabs(["Orange Cap", "Purple Cap", "Phase specialists"])
+    tab0, tab1, tab2, tab3 = st.tabs(
+        ["Hall of Fame photos", "Orange Cap race", "Purple Cap race", "Phase specialists"]
+    )
+
+    with tab0:
+        st.subheader("Orange Cap & Purple Cap winners — all seasons")
+        st.caption("Portrait cards with cap badges for every season champion.")
+        orange_w, purple_w = all_season_cap_winners()
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### Orange Cap")
+            rows = [
+                {
+                    "season": int(r.season),
+                    "player_name": r.player_name,
+                    "metric_label": "Runs",
+                    "metric_value": int(r.runs),
+                    "secondary": f"SR {r.strike_rate} · {int(r.sixes)} sixes",
+                }
+                for r in orange_w.itertuples(index=False)
+            ]
+            st.markdown(render_cap_gallery(rows, accent="orange", cols=1), unsafe_allow_html=True)
+        with c2:
+            st.markdown("#### Purple Cap")
+            rows = [
+                {
+                    "season": int(r.season),
+                    "player_name": r.player_name,
+                    "metric_label": "Wickets",
+                    "metric_value": int(r.wickets),
+                    "secondary": f"Econ {r.economy}",
+                }
+                for r in purple_w.itertuples(index=False)
+            ]
+            st.markdown(render_cap_gallery(rows, accent="purple", cols=1), unsafe_allow_html=True)
+        with st.expander("Full winners table"):
+            left, right = st.columns(2)
+            left.dataframe(orange_w, use_container_width=True, hide_index=True)
+            right.dataframe(purple_w, use_container_width=True, hide_index=True)
 
     with tab1:
         race = orange_cap_race(int(season), top_n=8)
@@ -512,6 +647,22 @@ def page_caps() -> None:
         if race.empty:
             st.info("No batting data for this season.")
         else:
+            if not standings.empty:
+                leader = standings.iloc[0]
+                st.markdown(
+                    render_cap_gallery(
+                        [{
+                            "season": int(season),
+                            "player_name": leader["player_name"],
+                            "metric_label": "Runs",
+                            "metric_value": int(leader["runs"]),
+                            "secondary": f"SR {leader['strike_rate']}",
+                        }],
+                        accent="orange",
+                        cols=1,
+                    ),
+                    unsafe_allow_html=True,
+                )
             fig = px.line(
                 race,
                 x="match_date",
@@ -531,6 +682,22 @@ def page_caps() -> None:
         if race.empty:
             st.info("No bowling data for this season.")
         else:
+            if not standings.empty:
+                leader = standings.iloc[0]
+                st.markdown(
+                    render_cap_gallery(
+                        [{
+                            "season": int(season),
+                            "player_name": leader["player_name"],
+                            "metric_label": "Wickets",
+                            "metric_value": int(leader["wickets"]),
+                            "secondary": f"Econ {leader['economy']}",
+                        }],
+                        accent="purple",
+                        cols=1,
+                    ),
+                    unsafe_allow_html=True,
+                )
             fig = px.line(
                 race,
                 x="match_date",
