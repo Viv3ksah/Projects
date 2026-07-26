@@ -18,6 +18,14 @@ if str(ROOT) not in sys.path:
 
 from app.styles import inject
 from config.settings import DB_PATH, MODELS_DIR
+from src.analytics.caps_race import (
+    cap_standings,
+    orange_cap_race,
+    phase_specialists,
+    purple_cap_race,
+)
+from src.analytics.comparison import compare_players, radar_frame
+from src.analytics.dream_team import build_dream_team, player_fantasy_pool
 from src.analytics.player_analytics import (
     batting_leaderboard,
     bowling_leaderboard,
@@ -37,6 +45,7 @@ from src.analytics.team_analytics import (
 )
 from src.analytics.venue_analytics import list_venues, toss_venue_impact, venue_difficulty_index
 from src.ml.match_outcome import predict_chase_win_prob, predict_match_outcome
+from src.ml.match_simulator import ChaseState, simulate_chase
 from src.ml.score_prediction import predict_final_score
 from src.utils.db import read_sql, row_count, table_exists
 
@@ -491,6 +500,217 @@ def page_sql() -> None:
             st.error(f"Query failed: {exc}")
 
 
+def page_caps() -> None:
+    st.header("Caps Race & Specialists")
+    seasons = _seasons()
+    season = st.selectbox("Season", seasons, index=len(seasons) - 1, key="caps_season")
+    tab1, tab2, tab3 = st.tabs(["Orange Cap", "Purple Cap", "Phase specialists"])
+
+    with tab1:
+        race = orange_cap_race(int(season), top_n=8)
+        standings, _ = cap_standings(int(season))
+        if race.empty:
+            st.info("No batting data for this season.")
+        else:
+            fig = px.line(
+                race,
+                x="match_date",
+                y="cum_runs",
+                color="player_name",
+                markers=True,
+                color_discrete_sequence=COLORWAY,
+                labels={"cum_runs": "Cumulative runs", "match_date": "Date"},
+            )
+            fig.update_layout(**PLOTLY_LAYOUT, height=420, title=f"Orange Cap race — {season}")
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(standings, use_container_width=True, hide_index=True)
+
+    with tab2:
+        race = purple_cap_race(int(season), top_n=8)
+        _, standings = cap_standings(int(season))
+        if race.empty:
+            st.info("No bowling data for this season.")
+        else:
+            fig = px.line(
+                race,
+                x="match_date",
+                y="cum_wickets",
+                color="player_name",
+                markers=True,
+                color_discrete_sequence=COLORWAY,
+                labels={"cum_wickets": "Cumulative wickets", "match_date": "Date"},
+            )
+            fig.update_layout(**PLOTLY_LAYOUT, height=420, title=f"Purple Cap race — {season}")
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(standings, use_container_width=True, hide_index=True)
+
+    with tab3:
+        specs = phase_specialists(int(season), min_balls=30)
+        phase = st.selectbox("Phase", ["powerplay", "middle", "death"], key="spec_phase")
+        c1, c2 = st.columns(2)
+        bat = specs["batting"]
+        bowl = specs["bowling"]
+        with c1:
+            st.subheader("Top strike rates")
+            show = bat[bat["phase"] == phase].head(12)
+            fig = px.bar(
+                show.sort_values("strike_rate"),
+                x="strike_rate",
+                y="player_name",
+                orientation="h",
+                color="sixes",
+                color_continuous_scale=["#0f3d2e", "#d9782d"],
+            )
+            fig.update_layout(**PLOTLY_LAYOUT, height=420)
+            st.plotly_chart(fig, use_container_width=True)
+        with c2:
+            st.subheader("Best economies")
+            showb = bowl[bowl["phase"] == phase].head(12)
+            fig = px.bar(
+                showb.sort_values("economy", ascending=False),
+                x="economy",
+                y="player_name",
+                orientation="h",
+                color="wickets",
+                color_continuous_scale=["#c6f135", "#0f3d2e"],
+            )
+            fig.update_layout(**PLOTLY_LAYOUT, height=420)
+            st.plotly_chart(fig, use_container_width=True)
+
+
+def page_compare_dream() -> None:
+    st.header("Compare Players & Dream Team")
+    seasons = _seasons()
+    season = st.selectbox("Season", seasons, index=len(seasons) - 1, key="cmp_season")
+    players = list_players(800)["player_name"].tolist()
+
+    tab1, tab2 = st.tabs(["Player comparison", "Dream Team XI"])
+    with tab1:
+        picks = st.multiselect(
+            "Pick 2–4 players",
+            players,
+            default=players[:3] if len(players) >= 3 else players,
+            max_selections=4,
+        )
+        if len(picks) < 2:
+            st.warning("Select at least two players.")
+        else:
+            raw = compare_players(picks, int(season))
+            rad = radar_frame(raw)
+            categories = ["runs", "strike_rate", "average", "sixes", "wickets", "economy"]
+            fig = go.Figure()
+            for _, row in rad.iterrows():
+                fig.add_trace(
+                    go.Scatterpolar(
+                        r=[row[c] for c in categories] + [row[categories[0]]],
+                        theta=categories + [categories[0]],
+                        fill="toself",
+                        name=row["player_name"],
+                    )
+                )
+            fig.update_layout(
+                **PLOTLY_LAYOUT,
+                height=480,
+                polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                title="Normalized skill radar (0–100)",
+                colorway=COLORWAY,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(raw, use_container_width=True, hide_index=True)
+
+    with tab2:
+        st.caption("Auto-picks an XI from season fantasy points with role + credit constraints.")
+        max_credits = st.slider("Max credits", 80.0, 120.0, 100.0, 1.0)
+        if st.button("Build Dream Team", type="primary"):
+            xi = build_dream_team(int(season), max_credits=max_credits)
+            if xi.empty:
+                st.warning("Could not build a valid XI for this season.")
+            else:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Total fantasy pts", f"{xi['total_pts'].sum():.0f}")
+                c2.metric("Credits used", f"{xi['credit'].sum():.1f}")
+                c3.metric("Players", len(xi))
+                fig = px.bar(
+                    xi.sort_values("total_pts"),
+                    x="total_pts",
+                    y="player_name",
+                    color="role_inferred",
+                    orientation="h",
+                    color_discrete_sequence=COLORWAY,
+                )
+                fig.update_layout(**PLOTLY_LAYOUT, height=480, title="Dream Team contribution")
+                st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(xi, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Download XI CSV",
+                    xi.to_csv(index=False),
+                    f"dream_team_{season}.csv",
+                    "text/csv",
+                )
+        with st.expander("Browse fantasy pool"):
+            pool = player_fantasy_pool(int(season)).head(40)
+            st.dataframe(pool, use_container_width=True, hide_index=True)
+
+
+def page_simulator() -> None:
+    st.header("Match Chase Simulator")
+    st.caption("Monte Carlo engine using empirical ball outcomes from the warehouse.")
+    seasons = _seasons()
+    season = st.selectbox("Calibration season", ["All"] + seasons, index=len(seasons), key="sim_season")
+    season_val = None if season == "All" else int(season)
+
+    c1, c2, c3, c4 = st.columns(4)
+    target = c1.number_input("Target", 100, 280, 185)
+    runs = c2.number_input("Runs scored", 0, 280, 95)
+    wickets = c3.slider("Wickets lost", 0, 9, 3)
+    overs = c4.number_input("Overs done (e.g. 11.2)", 0.0, 19.5, 11.2, 0.1)
+    n_sims = st.slider("Simulations", 500, 5000, 2000, 500)
+
+    if st.button("Run simulation", type="primary"):
+        state = ChaseState(target=int(target), runs=int(runs), wickets=int(wickets), overs_done=float(overs))
+        if state.balls_left <= 0:
+            st.error("No balls left to simulate.")
+            return
+        result = simulate_chase(state, n_sims=n_sims, season=season_val)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Chase win %", f"{result['win_probability'] * 100:.1f}%")
+        m2.metric("Median finish", f"{result['p50']:.0f}")
+        m3.metric("Required RR", f"{result['required_rr']:.2f}" if result["required_rr"] else "—")
+        m4.metric("Balls left", result["balls_left"])
+
+        dist = result["distribution"].reset_index()
+        dist.columns = ["final_score", "count"]
+        fig = px.area(
+            dist,
+            x="final_score",
+            y="count",
+            labels={"final_score": "Projected final score", "count": "Simulations"},
+        )
+        fig.add_vline(x=target, line_dash="dash", line_color="#d9782d")
+        fig.update_traces(line_color="#0f3d2e")
+        fig.update_layout(**PLOTLY_LAYOUT, height=400, title="Score distribution vs target")
+        st.plotly_chart(fig, use_container_width=True)
+
+        # overlay ML win-prob for comparison
+        try:
+            ml_p = predict_chase_win_prob(
+                {
+                    "runs_needed": result["runs_needed"],
+                    "balls_left": result["balls_left"],
+                    "wickets_left": 10 - wickets,
+                    "required_rr": result["required_rr"] or 99,
+                    "cum_runs": runs,
+                    "over_number": int(overs),
+                }
+            )
+            st.info(
+                f"Model comparison — Monte Carlo: {result['win_probability']*100:.1f}% · "
+                f"ML win-prob model: {ml_p*100:.1f}%"
+            )
+        except Exception:
+            pass
+
+
 def main() -> None:
     st.set_page_config(
         page_title="IPL Analytics Engine",
@@ -508,6 +728,9 @@ def main() -> None:
             "Player Lab",
             "Venue Lab",
             "Teams & H2H",
+            "Caps & Specialists",
+            "Compare & Dream Team",
+            "Match Simulator",
             "ML Predictions",
             "SQL Workbench",
         ],
@@ -520,6 +743,9 @@ def main() -> None:
         "Player Lab": page_players,
         "Venue Lab": page_venues,
         "Teams & H2H": page_teams,
+        "Caps & Specialists": page_caps,
+        "Compare & Dream Team": page_compare_dream,
+        "Match Simulator": page_simulator,
         "ML Predictions": page_predictions,
         "SQL Workbench": page_sql,
     }

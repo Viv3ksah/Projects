@@ -27,7 +27,11 @@ End-to-end cricket analytics platform built on **250K+ ball-by-ball records**, w
 4. **Venue batting/bowling indices** (league-normalized)  
 5. **In-app SQL workbench** (read-only)  
 6. **Fantasy point estimates** on leaderboards  
-7. **One-command pipeline** (`scripts/run_all.py`)
+7. **One-command pipeline** (`scripts/run_all.py`)  
+8. **Orange / Purple Cap race** charts + phase specialists  
+9. **Player comparison radar** (2–4 players)  
+10. **Dream Team XI builder** (role + credit constraints)  
+11. **Monte Carlo chase simulator** (empirical ball model vs ML win-prob)
 
 ---
 
