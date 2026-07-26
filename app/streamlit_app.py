@@ -67,9 +67,38 @@ PLOTLY_LAYOUT = dict(
 COLORWAY = ["#0f3d2e", "#1f7a4d", "#c6f135", "#d9782d", "#245b4a", "#8fbf5a"]
 
 
+@st.cache_resource(show_spinner=False)
+def _bootstrap_if_needed() -> bool:
+    """Build warehouse + models once per server process when missing (cloud deploy)."""
+    models_ok = (MODELS_DIR / "match_outcome.joblib").exists()
+    if DB_PATH.exists() and table_exists("deliveries") and models_ok:
+        return True
+
+    import importlib.util
+
+    boot_path = ROOT / "scripts" / "bootstrap_deploy.py"
+    spec = importlib.util.spec_from_file_location("bootstrap_deploy", boot_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load bootstrap script: {boot_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.bootstrap(force=False)
+    return DB_PATH.exists() and table_exists("deliveries")
+
+
 def _require_warehouse() -> bool:
-    if not DB_PATH.exists() or not table_exists("deliveries"):
-        st.error("Warehouse not found. Run `python scripts/run_etl.py` first.")
+    try:
+        with st.spinner("Preparing analytics warehouse & models (first run only)…"):
+            ok = _bootstrap_if_needed()
+    except Exception as exc:
+        st.error(
+            "Could not prepare data automatically. "
+            "Run `python scripts/bootstrap_deploy.py` or `python scripts/run_all.py`.\n\n"
+            f"Details: {exc}"
+        )
+        return False
+    if not ok:
+        st.error("Warehouse not found. Run `python scripts/run_all.py` first.")
         return False
     return True
 

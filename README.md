@@ -34,7 +34,9 @@ End-to-end cricket analytics platform built on **250K+ ball-by-ball records**, w
 8. **Orange / Purple Cap race** charts + phase specialists  
 9. **Player comparison radar** (2–4 players)  
 10. **Dream Team XI builder** (role + credit constraints)  
-11. **Monte Carlo chase simulator** (empirical ball model vs ML win-prob)
+11. **Monte Carlo chase simulator** (empirical ball model vs ML win-prob)  
+12. **Cap Hall of Fame photo cards** for Orange/Purple Cap winners across all seasons  
+13. **Player-aware win prediction** — pick key players using last-season form
 
 ---
 
@@ -50,6 +52,18 @@ python scripts/run_all.py
 # 3) Launch dashboard
 streamlit run app/streamlit_app.py
 ```
+
+## Deploy (Streamlit Cloud)
+
+See **[DEPLOY.md](DEPLOY.md)** for full steps.
+
+Short version:
+1. Go to [share.streamlit.io](https://share.streamlit.io) → sign in with GitHub  
+2. **Create app** → repo `Viv3ksah/Projects`  
+3. Branch: `cursor/ipl-analytics-engine-3a6e` (or `main` after merge)  
+4. Main file: `app/streamlit_app.py` → **Deploy**  
+
+First launch auto-builds the warehouse + models.
 
 Individual steps:
 
