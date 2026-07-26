@@ -268,7 +268,8 @@ def page_teams() -> None:
     st.subheader("Head-to-head")
     c1, c2 = st.columns(2)
     a = c1.selectbox("Team A", teams, index=0)
-    b = c2.selectbox("Team B", teams, index=min(1, len(teams) - 1))
+    b_options = [t for t in teams if t != a] or teams
+    b = c2.selectbox("Team B", b_options, index=0)
     if a == b:
         st.warning("Pick two different teams.")
         return
@@ -309,9 +310,11 @@ def page_predictions() -> None:
     seasons = _seasons()
 
     with tab1:
+        team_names = teams["team_name"].tolist()
         c1, c2 = st.columns(2)
-        t1 = c1.selectbox("Team 1", teams["team_name"], key="pred_t1")
-        t2 = c2.selectbox("Team 2", teams["team_name"], key="pred_t2")
+        t1 = c1.selectbox("Team 1", team_names, key="pred_t1")
+        t2_options = [t for t in team_names if t != t1] or team_names
+        t2 = c2.selectbox("Team 2", t2_options, key="pred_t2")
         venue = st.selectbox("Venue", venues["venue_name"], key="pred_venue")
         season = st.selectbox("Season context", seasons, index=len(seasons) - 1, key="pred_season")
         toss = st.radio("Toss winner", ["Team 1", "Team 2"], horizontal=True)
