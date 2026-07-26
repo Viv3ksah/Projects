@@ -247,7 +247,16 @@ def page_venues() -> None:
 
 def page_teams() -> None:
     st.header("Team & Head-to-Head")
-    teams = list_teams()["team_name"].tolist()
+    # Prefer teams that actually appear in matches for meaningful H2H
+    active = read_sql(
+        """
+        SELECT DISTINCT t.team_name
+        FROM teams t
+        JOIN matches m ON t.team_id IN (m.team1_id, m.team2_id)
+        ORDER BY t.team_name
+        """
+    )["team_name"].tolist()
+    teams = active or list_teams()["team_name"].tolist()
     seasons = _seasons()
     season = st.selectbox("Season", ["All"] + seasons, index=len(seasons), key="team_season")
     season_val = None if season == "All" else int(season)
@@ -310,7 +319,15 @@ def page_predictions() -> None:
     seasons = _seasons()
 
     with tab1:
-        team_names = teams["team_name"].tolist()
+        active_teams = read_sql(
+            """
+            SELECT DISTINCT t.team_id, t.team_name
+            FROM teams t
+            JOIN matches m ON t.team_id IN (m.team1_id, m.team2_id)
+            ORDER BY t.team_name
+            """
+        )
+        team_names = active_teams["team_name"].tolist() or teams["team_name"].tolist()
         c1, c2 = st.columns(2)
         t1 = c1.selectbox("Team 1", team_names, key="pred_t1")
         t2_options = [t for t in team_names if t != t1] or team_names
@@ -320,8 +337,9 @@ def page_predictions() -> None:
         toss = st.radio("Toss winner", ["Team 1", "Team 2"], horizontal=True)
         decision = st.radio("Toss decision", ["field", "bat"], horizontal=True)
 
-        t1_id = int(teams.loc[teams["team_name"] == t1, "team_id"].iloc[0])
-        t2_id = int(teams.loc[teams["team_name"] == t2, "team_id"].iloc[0])
+        id_map = dict(zip(active_teams["team_name"], active_teams["team_id"])) if not active_teams.empty else dict(zip(teams["team_name"], teams["team_id"]))
+        t1_id = int(id_map[t1])
+        t2_id = int(id_map[t2])
         v_id = int(venues.loc[venues["venue_name"] == venue, "venue_id"].iloc[0])
 
         rates = read_sql(
